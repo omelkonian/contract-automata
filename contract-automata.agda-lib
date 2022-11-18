@@ -1,0 +1,5 @@
+name: contract-automata
+depend:
+  standard-library
+  formal-prelude
+include: .

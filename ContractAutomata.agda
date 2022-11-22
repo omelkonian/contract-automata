@@ -1,3 +1,4 @@
+{-# OPTIONS --allow-unsolved-metas #-}
 open import Prelude.Init; open SetAsType
 open Nat using (_⊓_)
 open import Prelude.Sets
@@ -6,7 +7,6 @@ open import Prelude.InferenceRules
 open import Prelude.Ord
 open import Prelude.Measurable
 open import Prelude.Decidable
-open import Prelude.Null
 open import Prelude.Setoid
 open import Prelude.DecLists
 
@@ -117,218 +117,312 @@ private variable
 
 -- ** Configuration Relation
 
-data _⇒⟨_⟩_ : (src : Conf s) → l ⁺ → (dst : Conf s′)
-            → ⦃ s —[ l ]→ s′ ⦄
-            → ⦃ src .duration .end < dst .duration .end ⦄
-            → Type where
+data _⇒[_]_ : Conf s → l ⁺ → Conf s′ → ⦃ s —[ l ]→ s′ ⦄ → Type where
 
-  Propose : ∀ (d< : d .end < d′ .end) → let instance _ = d< in
+  Propose :
+    ∙ 0 < payment .amount
     ∙ payment .amount ≤ v
     ∙ payment .deadline > d′ .end
       ───────────────────────────────────────────────────
       record {defWith v d; state = Holding}
-      ⇒⟨ Propose payment ⟩
+      ⇒[ Propose payment ]
       record {defWith v d′; state = Collecting payment ∅}
 
-  Add : ∀ (d< : d .end < d′ .end) → let instance _ = d< in
+  Add :
+    ∙ key ∈ˢ sgs′
     ∙ key ∈ˢ authorizedKeys
-      ────────────────────────────────────────────────────────────
+      ───────────────────────────────────────────────────────────
       record { defWith v d; signers = sgs
-             ; state = Collecting payment keys }
-      ⇒⟨ Add key ⟩
+            ; state = Collecting payment keys }
+      ⇒[ Add key ]
       record { defWith v d′; signers = sgs′
-             ; state = Collecting payment (keys ∪ singleton key) }
+            ; state = Collecting payment (keys ∪ singleton key) }
 
-  Pay : ∀ (d< : d .end < d′ .end) → let instance _ = d< in
+  Pay :
     ∙ ∣ keys ∣ ≥ noRequiredSignatures
     ∙ d′ .end ≤ payment .deadline
       ─────────────────────────────────────────────────────
       record {defWith v d; state = Collecting payment keys}
-      ⇒⟨ Pay ⟩
+      ⇒[ Pay ]
       record { defWith (v ∸ payment .amount) d′
              ; state = Holding
              ; outputs = [ mkPayment payment ] }
 
-  Cancel : ∀ (d< : d .end < d′ .end) → let instance _ = d< in
+  Cancel :
     d′ .start > payment .deadline
     ─────────────────────────────────────────────────────
     record {defWith v d; state = Collecting payment keys}
-    ⇒⟨ Cancel ⟩
+    ⇒[ Cancel ]
     record {defWith v d′; state = Holding}
+
+_⇒⟨_⟩_ : (cs : Conf s) → (l⁺ : l ⁺) → (cs′ : Conf s′) → ⦃ s —[ l ]→ s′ ⦄ → Type
+cs ⇒⟨ l⁺ ⟩ cs′ = (cs .duration .end < cs′ .duration .end) × (cs ⇒[ l⁺ ] cs′)
 
 -- ** Contract Implementation
 
--- transition : (s⁺ : Conf s) (l⁺ : l ⁺) → List Message → Time
---             → Maybe (∃ λ s′ → ∃ λ (s⁺′ : Conf s′) → (s⁺ ⇒⟨ l⁺ ⟩ s⁺′))
+-- transition : (cs : Conf s) (l⁺ : l ⁺) → List Message → Time
+--             → Maybe (∃ λ s′ → ∃ λ (cs′ : Conf s′) → (cs ⇒⟨ l⁺ ⟩ cs′))
 
 transition : Conf s → l ⁺ → List Message → Time
            → Maybe (∃ λ s′ → (s —[ l ]→ s′) × Conf s′)
-transition {Holding} {Propose} s⁺ (Propose payment) is t =
+transition {Holding} {Propose} cs (Propose payment) is t =
   let t′ = t + standardInterval in
-  if (s⁺ == record {defWith (s⁺ .value) (s⁺ .duration); state = Holding})
+  if (cs == record {defWith (cs .value) (cs .duration); state = Holding})
    ∧ (is == [])
-   ∧ (s⁺ .duration .end <ᵇ t′)
+   ∧ (cs .duration .end <ᵇ t′)
    --
    ∧ (0 <ᵇ payment .amount)
-   ∧ (payment .amount ≤ᵇ s⁺ .value)
+   ∧ (payment .amount ≤ᵇ cs .value)
    ∧ (payment .deadline >ᵇ t′)
   then just $ -, it , record
     { def
     ; state = Collecting payment ∅
-    ; value = s⁺ .value
+    ; value = cs .value
     ; duration = t , t′
     }
   else
     nothing
-transition {Holding} {Add} s⁺ l⁺ is t = nothing -- no λ where (_ , ())
-transition {Holding} {Pay} s⁺ l⁺ is t = nothing
-transition {Holding} {Cancel} s⁺ l⁺ is t = nothing
-transition {Collecting} {Propose} s⁺ l⁺ is t = nothing
-transition {Collecting} {Add} s⁺ (Add key) is t =
+transition {Holding} {Add} cs l⁺ is t = nothing -- no λ where (_ , ())
+transition {Holding} {Pay} cs l⁺ is t = nothing
+transition {Holding} {Cancel} cs l⁺ is t = nothing
+transition {Collecting} {Propose} cs l⁺ is t = nothing
+transition {Collecting} {Add} cs (Add key) is t =
   let t′ = t + standardInterval in
-  -- with Collecting payment keys ← s⁺ .state =
-  case s⁺ .state of λ where
+  -- with Collecting payment keys ← cs .state =
+  case cs .state of λ where
     (Collecting payment keys) →
       if (is == [])
-       ∧ (s⁺ .inputs == [])
-       ∧ (s⁺ .outputs == [])
-       ∧ (s⁺ .duration .end <ᵇ t′)
+       ∧ (cs .inputs == [])
+       ∧ (cs .outputs == [])
+       ∧ (cs .duration .end <ᵇ t′)
        --
        ∧ ⌊ key ∈ˢ? authorizedKeys ⌋
       then just $ -, it , record
         { def
         ; state = Collecting payment (keys ∪ singleton key)
-        ; value = s⁺ .value
+        ; value = cs .value
         ; duration = t , t′
         ; signers = singleton key
         }
       else nothing
-transition {Collecting} {Pay} s⁺ l⁺ is t =
-  case s⁺ .state of λ where
+transition {Collecting} {Pay} cs l⁺ is t =
+  case cs .state of λ where
     (Collecting payment keys) →
       let t′ = (t + standardInterval) ⊓ payment .deadline in
       if (is == [])
-       ∧ (s⁺ .inputs == [])
-       ∧ (s⁺ .outputs == [])
-       ∧ (s⁺ .signers == ∅)
-       ∧ (s⁺ .duration .end <ᵇ t′)
+       ∧ (cs .inputs == [])
+       ∧ (cs .outputs == [])
+       ∧ (cs .signers == ∅)
+       ∧ (cs .duration .end <ᵇ t′)
        --
        ∧ (∣ keys ∣ ≥ᵇ noRequiredSignatures)
        ∧ (t <ᵇ payment .deadline)
       then just $ -, it , record
         { def
         ; state = Holding
-        ; value = s⁺ .value ∸ payment .amount
+        ; value = cs .value ∸ payment .amount
         ; outputs = [ mkPayment payment ]
         ; duration = t , t′
         }
       else nothing
-transition {Collecting} {Cancel} s⁺ l⁺ is t =
+transition {Collecting} {Cancel} cs l⁺ is t =
   let t′ = t + standardInterval in
-  case s⁺ .state of λ where
+  case cs .state of λ where
     (Collecting payment keys) →
       if (is == [])
-       ∧ (s⁺ .inputs == [])
-       ∧ (s⁺ .outputs == [])
-       ∧ (s⁺ .signers == ∅)
-       ∧ (s⁺ .duration .end <ᵇ t′)
+       ∧ (cs .inputs == [])
+       ∧ (cs .outputs == [])
+       ∧ (cs .signers == ∅)
+       ∧ (cs .duration .end <ᵇ t′)
        --
        ∧ (t >ᵇ payment .deadline)
       then just $ -, it , record
         { def
         ; state = Holding
-        ; value = s⁺ .value
+        ; value = cs .value
         ; duration = t , t′
         }
       else nothing
 
 validate : s ⁺ → l ⁺ → Conf s′ → Bool
-validate {Holding} {Propose} Holding (Propose payment) s⁺′ =
-  case s⁺′ .state of λ where
-    (Collecting payment keys) →
-        (s⁺′ .outputs == [])
+validate {Holding} {Propose} Holding (Propose payment) cs′ =
+  case cs′ .state of λ where
+    (Collecting payment′ keys) →
+        (payment == payment′)
+      ∧ (keys == ∅)
+      ∧ (cs′ .inputs == [])
+      ∧ (cs′ .outputs == [])
+      ∧ (cs′ .signers == ∅)
       ∧ (0 <ᵇ payment .amount)
-      ∧ (payment .amount ≤ᵇ s⁺′ .value)
-      ∧ (payment .deadline >ᵇ s⁺′ .duration .end)
-      ∧ Nullᵇ keys
+      ∧ (payment .amount ≤ᵇ cs′ .value)
+      ∧ (payment .deadline >ᵇ cs′ .duration .end)
     _ → false
-validate {Holding} {Add} s⁺ l⁺ s⁺′ = false
-validate {Holding} {Pay} s⁺ l⁺ s⁺′ = false
-validate {Holding} {Cancel} s⁺ l⁺ s⁺′ = false
-validate {Collecting} {Propose} s⁺ l⁺ s⁺′ = false
-validate {Collecting} {Add} s⁺ (Add key) s⁺′ =
-  case s⁺′ .state of λ where
-    (Collecting payment keys) →
-        (s⁺′ .outputs == [])
-      ∧ ⌊ key ∈ˢ? s⁺′ .signers ⌋
+validate {Holding} {Add} s⁺ l⁺ cs′ = false
+validate {Holding} {Pay} s⁺ l⁺ cs′ = false
+validate {Holding} {Cancel} s⁺ l⁺ cs′ = false
+validate {Collecting} {Propose} s⁺ l⁺ cs′ = false
+validate {Collecting} {Add} s⁺ (Add key) cs′ =
+  case cs′ .state of λ where
+    (Collecting _ keys) →
+        (cs′ .outputs == [])
+      ∧ ⌊ key ∈ˢ? cs′ .signers ⌋
       ∧ ⌊ key ∈ˢ? authorizedKeys ⌋
       ∧ ⌊ key ∈ˢ? keys ⌋
     _ → false
-validate {Collecting} {Pay} (Collecting payment keys) l⁺ s⁺′ =
-  case s⁺′ .state of λ where
+validate {Collecting} {Pay} (Collecting payment keys) l⁺ cs′ =
+  case cs′ .state of λ where
     Holding →
         (∣ keys ∣ ≥ᵇ noRequiredSignatures)
-      ∧ (s⁺′ .duration .end ≤ᵇ payment .deadline)
-      ∧ (take 1 (s⁺′ .outputs) == [ mkPayment payment ])
+      ∧ (cs′ .duration .end ≤ᵇ payment .deadline)
+      ∧ (take 1 (cs′ .outputs) == [ mkPayment payment ])
     _ → false
-validate {Collecting} {Cancel} (Collecting payment keys) l⁺ s⁺′ =
-  case s⁺′ .state of λ where
+validate {Collecting} {Cancel} (Collecting payment keys) l⁺ cs′ =
+  case cs′ .state of λ where
     Holding →
-        (s⁺′ .outputs == [])
-      ∧ (s⁺′ .duration .start >ᵇ payment .deadline)
+        (cs′ .outputs == [])
+      ∧ (cs′ .duration .start >ᵇ payment .deadline)
     _ → false
 
 -- ** Soundness
 
-transition-sound : ∀ {s⁺ : Conf s} {l⁺ : l ⁺} {s⁺′ : Conf s′} {is : List Message} →
-  ∀ (s→ : s —[ l ]→ s′) →
-  ∙ transition s⁺ l⁺ is t ≡ just (s′ , s→ , s⁺′)
-    ────────────────────────────────────────────────────────────────
-    ∃ λ (d< : s⁺ .duration .end < s⁺′ .duration .end)
-    → (s⁺ ⇒⟨ l⁺ ⟩ s⁺′) ⦃ s→ ⦄ ⦃ d< ⦄
-    -- × (s⁺′ .inputs ⊆ is)
-    -- × T (validate (s⁺ .state) l⁺ s⁺′)
-transition-sound {Holding}{Propose}{s′}{t}{s⁺}{Propose payment}{s⁺′}{is} Propose tr≡
-  with yes refl ← s⁺ ≟ record {def; value = s⁺ .value; duration = s⁺ .duration; state = Holding}
-  with yes refl ← is ≟ []
-  with yes d< ← s⁺ .duration .end <? t + standardInterval
+validation-sound : ∀ {s⁺ : s ⁺} {l⁺ : l ⁺} {cs′ : Conf s′} →
+  T (validate s⁺ l⁺ cs′)
+  ─────────────────────────
+  ∃ λ (s→ : s —[ l ]→ s′) →
+  ∃ λ (cs : Conf s) →
+    (cs ⇒⟨ l⁺ ⟩ cs′) ⦃ s→ ⦄
+validation-sound {Holding} {Propose} {s′} {Holding} {Propose payment} {cs′} val≡
+  with Collecting payment′ keys ← cs′ .state in st≡
+  with yes refl ← payment ≟ payment′
+  with yes refl ← keys ≟ ∅
+  with yes refl ← cs′ .inputs ≟ []
+  with yes refl ← cs′ .outputs ≟ []
+  with yes refl ← cs′ .signers ≟ ∅
   with yes p₁ ← 0 <? payment .amount
-  with yes p₂ ← payment .amount ≤? s⁺ .value
+  with yes p₂ ← payment .amount ≤? cs′ .value
+  with yes p₃ ← payment .deadline >? cs′ .duration .end
+  rewrite st≡
+  = Propose
+  , (record {defWith (cs′ .value) {!!}; state = Holding})
+  , {!!}
+  , Propose p₁ p₂ p₃
+validation-sound {Collecting} {Add} {s′} {s⁺} {Add x} {cs′} val≡ = {!!}
+validation-sound {Collecting} {Pay} {s′} {s⁺} {Pay} {cs′} val≡ = {!!}
+validation-sound {Collecting} {Cancel} {s′} {s⁺} {Cancel} {cs′} val≡ = {!!}
+
+transition-sound : ∀ {cs : Conf s} {l⁺ : l ⁺} {cs′ : Conf s′} {is : List Message} →
+  ∀ (s→ : s —[ l ]→ s′) →
+
+  transition cs l⁺ is t ≡ just (s′ , s→ , cs′)
+  ────────────────────────────────────────────
+  (cs ⇒⟨ l⁺ ⟩ cs′) ⦃ s→ ⦄
+  -- × (cs′ .inputs ⊆ is)
+  -- × T (validate (cs .state) l⁺ cs′)
+transition-sound {Holding}{Propose}{s′}{t}{cs}{Propose payment}{cs′}{is} Propose tr≡
+  with yes refl ← cs ≟ record {def; value = cs .value; duration = cs .duration; state = Holding}
+  with yes refl ← is ≟ []
+  with yes d< ← cs .duration .end <? t + standardInterval
+  with yes p₁ ← 0 <? payment .amount
+  with yes p₂ ← payment .amount ≤? cs .value
   with yes p₃ ← payment .deadline >? t + standardInterval
   with refl ← tr≡
-  = d< , Propose d< p₂ p₃
-transition-sound {Collecting}{Add}{s′}{t}{s⁺}{Add key}{s⁺′}{is} Add tr≡
-  with Collecting payment keys ← s⁺ .state in st≡
+  = d< , Propose p₁ p₂ p₃
+transition-sound {Collecting}{Add}{s′}{t}{cs}{Add key}{cs′}{is} Add tr≡
+  with Collecting payment keys ← cs .state in st≡
   with yes refl ← is ≟ []
-  with yes refl ← s⁺ .inputs ≟ []
-  with yes refl ← s⁺ .outputs ≟ []
-  with yes d< ← s⁺ .duration .end <? t + standardInterval
+  with yes refl ← cs .inputs ≟ []
+  with yes refl ← cs .outputs ≟ []
+  with yes d< ← cs .duration .end <? t + standardInterval
   with yes k∈ ← key ∈ˢ? authorizedKeys
   with refl ← tr≡
   rewrite st≡
-  = d< , Add d< k∈
-transition-sound {Collecting}{Pay}{s′}{t}{s⁺}{Pay}{s⁺′}{is} Pay tr≡
-  with Collecting payment keys ← s⁺ .state in st≡
+  = d< , Add ∈ˢ-singleton k∈
+transition-sound {Collecting}{Pay}{s′}{t}{cs}{Pay}{cs′}{is} Pay tr≡
+  with Collecting payment keys ← cs .state in st≡
   with yes refl ← is ≟ []
-  with yes refl ← s⁺ .inputs ≟ []
-  with yes refl ← s⁺ .outputs ≟ []
-  with yes refl ← s⁺ .signers ≟ ∅
-  with yes d< ← s⁺ .duration .end <? (t + standardInterval) ⊓ payment .deadline
+  with yes refl ← cs .inputs ≟ []
+  with yes refl ← cs .outputs ≟ []
+  with yes refl ← cs .signers ≟ ∅
+  with yes d< ← cs .duration .end <? (t + standardInterval) ⊓ payment .deadline
   with yes k> ← ∣ keys ∣ ≥? noRequiredSignatures
   with yes t< ← t <? payment .deadline
   with refl ← tr≡
   rewrite st≡
-  = d< , Pay d< k> (Nat.m⊓n≤n (t + standardInterval) (payment .deadline))
-transition-sound {Collecting}{Cancel}{s′}{t}{s⁺}{Cancel}{s⁺′}{is} Cancel tr≡
-  with Collecting payment keys ← s⁺ .state in st≡
+  = d< , Pay k> (Nat.m⊓n≤n (t + standardInterval) (payment .deadline))
+transition-sound {Collecting}{Cancel}{s′}{t}{cs}{Cancel}{cs′}{is} Cancel tr≡
+  with Collecting payment keys ← cs .state in st≡
   with yes refl ← is ≟ []
-  with yes refl ← s⁺ .inputs ≟ []
-  with yes refl ← s⁺ .outputs ≟ []
-  with yes refl ← s⁺ .signers ≟ ∅
-  with yes d< ← s⁺ .duration .end <? t + standardInterval
+  with yes refl ← cs .inputs ≟ []
+  with yes refl ← cs .outputs ≟ []
+  with yes refl ← cs .signers ≟ ∅
+  with yes d< ← cs .duration .end <? t + standardInterval
   with yes t< ← t >? payment .deadline
   with refl ← tr≡
   rewrite st≡
-  = d< , Cancel d< t<
+  = d< , Cancel t<
 
--- ** Completeness?
+-- ** Completeness
+
+validation-complete : ∀ {s→ : s —[ l ]→ s′} (cs : Conf s) (l⁺ : l ⁺) (cs′ : Conf s′) →
+
+  (cs ⇒⟨ l⁺ ⟩ cs′) ⦃ s→ ⦄
+  ───────────────────────────────
+  T (validate (cs .state) l⁺ cs′)
+validation-complete {Holding} {Propose} {.Collecting}
+  cs
+  (Propose payment)
+  cs′@(record {state = .(Collecting payment ∅); outputs = .[]})
+  (d< , Propose p₁ p₂ p₃)
+  rewrite ≟-refl payment
+        | dec-yes (0 <? payment .amount) p₁ .proj₂
+        | dec-yes (payment .amount ≤? cs′ .value) p₂ .proj₂
+        | dec-yes (payment .deadline >? cs′ .duration .end) p₃ .proj₂
+        = tt
+validation-complete {Collecting} {Add} {s′}
+  cs@(record {state = .(Collecting _ keys)})
+  (Add key)
+  cs′@(record {state = .(Collecting _ (keys ∪ singleton key))})
+  (d< , Add {keys = keys} k∈ k∈auth)
+  rewrite dec-yes (key ∈ˢ? cs′ .signers) k∈ .proj₂
+        | dec-yes (key ∈ˢ? authorizedKeys) k∈auth .proj₂
+        | dec-yes (key ∈ˢ? keys ∪ singleton key)
+                  (∈-∪⁺ʳ key keys (singleton key) ∈ˢ-singleton) .proj₂
+        = tt
+validation-complete {Collecting} {Pay} {s′}
+  cs@(record {state = .(Collecting payment keys)})
+  Pay
+  cs′@(record {state = .Holding})
+  (d< , Pay {keys = keys} {payment = payment} k≥ d≤)
+  rewrite dec-yes (∣ keys ∣ ≥? noRequiredSignatures) k≥ .proj₂
+        | dec-yes (cs′ .duration .end ≤? payment .deadline) d≤ .proj₂
+        | dec-yes (take 1 (cs′ .outputs) ≟ [ mkPayment payment ]) refl .proj₂
+        = tt
+validation-complete {Collecting} {Cancel} {s′}
+  cs@(record {state = .(Collecting payment keys)})
+  Cancel
+  cs′@(record {state = .Holding})
+  (d< , Cancel {payment = payment} {keys = keys} d>)
+  rewrite dec-yes (cs′ .duration .start >? payment .deadline) d> .proj₂
+        = tt
+
+transition-complete : ∀ {cs : Conf s} {l⁺ : l ⁺} {cs′ : Conf s′} {is : List Message} →
+  ∀ (s→ : s —[ l ]→ s′) →
+
+  ∙ (cs ⇒⟨ l⁺ ⟩ cs′) ⦃ s→ ⦄
+  -- ∙ (cs′ .inputs ⊆ is)
+  -- ∙ T (validate (cs .state) l⁺ cs′)
+  ────────────────────────────────────────────────────────────────
+  transition cs l⁺ is t ≡ just (s′ , s→ , cs′)
+transition-complete {Holding} {Propose} {s′} {t} {cs} {Propose payment} {cs′} {is}
+  s→ (d< , Propose p₁ p₂ p₃)
+  rewrite dec-yes (cs ≟ record {def; value = cs .value; duration = cs .duration; state = Holding}) refl .proj₂
+        | dec-yes (is ≟ []) {!!} .proj₂
+        | dec-yes (cs .duration .end <? t + standardInterval) {!!} .proj₂
+        | dec-yes (0 <? payment .amount) p₁ .proj₂
+        | dec-yes (payment .amount ≤? cs .value) p₂ .proj₂
+        | dec-yes (payment .deadline >? t + standardInterval) {!p₃!} .proj₂
+        | (cs′ .duration ≡ (t , t + standardInterval)) ∋ {!!}
+        = refl
+transition-complete {Collecting} {Add} {s′} {t} {cs} {l⁺} {cs′} {is} s→ s⇒ = {!!}
+transition-complete {Collecting} {Pay} {s′} {t} {cs} {l⁺} {cs′} {is} s→ s⇒ = {!!}
+transition-complete {Collecting} {Cancel} {s′} {t} {cs} {l⁺} {cs′} {is} s→ s⇒ = {!!}
